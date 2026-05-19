@@ -69,6 +69,9 @@ def build_comments(data: dict, requested_by: str = "") -> str:
         lines.append("")
 
     for key, value in data.items():
+        if key.startswith("_"):
+            continue
+
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
 
@@ -180,10 +183,14 @@ def build_deal_fields(data: dict, requested_by: str = "") -> dict:
         if value not in (None, ""):
             fields[bitrix_code] = value
 
-    # На всякий случай дублируем ИНН во второй возможный field.
-    # Если поле не нужно, Bitrix просто проигнорирует/или покажет ошибку — тогда уберём.
-    if data.get("ИНН"):
-        fields["UF_CRM_6461EF570B64C"] = data["ИНН"]
+    # Поля, выбранные кнопками в Telegram.
+    # Они уже приходят готовыми в формате Bitrix:
+    # {"UF_CRM_1681712449": [4956], "UF_CRM_1730374903870": 10819}
+    extra_fields = data.get("_bitrix_fields", {})
+
+    for bitrix_code, value in extra_fields.items():
+        if value not in (None, ""):
+            fields[bitrix_code] = value
 
     return fields
 
