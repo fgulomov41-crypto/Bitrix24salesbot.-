@@ -15,16 +15,15 @@ DRY_RUN = os.getenv("DRY_RUN", "1") == "1"
 FIELD_MAPPING = {
     "Название": "TITLE",
 
-    # Текстовые поля
+    # Проверено по готовой сделке
     "Бренд": "UF_CRM_1667234851735",
-    "Клиент": "UF_CRM_COMPANY_TITLE",
-    "Компания": "UF_CRM_COMPANY_TITLE",
 
-    # ИНН: основной вариант
-    "ИНН": "UF_CRM_1730198850",
+    # ИНН по готовой сделке
+    "ИНН": "UF_CRM_APP_CPV_FIELD",
 
     "Номер договора": "UF_CRM_1669358388218",
     "Адрес ресторана": "UF_CRM_1682671296431",
+    "Локация": "UF_CRM_1667900312618",
     "ФИО директора": "UF_CRM_1683720999095",
     "Название банка": "UF_CRM_1683720954828",
     "Расчетный счет в банке": "UF_CRM_1682671131552",
@@ -44,6 +43,24 @@ FIELD_MAPPING = {
 }
 
 
+def bitrix_call(method: str, payload: dict) -> dict:
+    if not WEBHOOK:
+        raise RuntimeError("BITRIX_WEBHOOK_URL не задан в .env")
+
+    url = f"{WEBHOOK}/{method}.json"
+    response = requests.post(url, json=payload, timeout=30)
+
+    try:
+        result = response.json()
+    except Exception:
+        raise RuntimeError(f"Bitrix вернул не JSON: {response.text}")
+
+    if "error" in result:
+        raise RuntimeError(json.dumps(result, ensure_ascii=False, indent=2))
+
+    return result
+
+
 def build_comments(data: dict, requested_by: str = "") -> str:
     lines = ["Данные из Telegram-заявки:", ""]
 
@@ -56,6 +73,88 @@ def build_comments(data: dict, requested_by: str = "") -> str:
             lines.append(f"{key}: {value}")
 
     return "\n".join(lines)
+
+
+def normalize_company_name(data: dict) -> str:
+    return (
+        data.get("Клиент")
+        or data.get("Компания")
+        or data.get("Клиент (Компания)")
+        or ""
+    ).strip()
+
+
+def find_company_by_title(company_name: str):
+    if not company_name:
+        return None
+
+    result = bitrix_call(
+        "crm.company.list",
+        {
+            "filter": {
+                "TITLE": company_name
+            },
+            "select": ["ID", "TITLE"]
+        }
+    )
+
+    companies = result.get("result", [])
+
+    if companies:
+        return companies[0].get("ID")
+
+    return None
+
+
+def create_company(data: dict):
+    company_name = normalize_company_name(data)
+
+    if not company_name:
+        return None
+
+    fields = {
+        "TITLE": company_name,
+        "ASSIGNED_BY_ID": DEFAULT_ASSIGNED_BY_ID,
+        "COMMENTS": build_comments(data),
+    }
+
+    phone = (
+        data.get("Номер телефона для аккаунта")
+        or data.get("Номер телефона для личного кабинета")
+        or data.get("Телефон")
+        or ""
+    )
+
+    if phone:
+        fields["PHONE"] = [
+            {
+                "VALUE": phone,
+                "VALUE_TYPE": "WORK"
+            }
+        ]
+
+    result = bitrix_call(
+        "crm.company.add",
+        {
+            "fields": fields
+        }
+    )
+
+    return result.get("result")
+
+
+def get_or_create_company(data: dict):
+    company_name = normalize_company_name(data)
+
+    if not company_name:
+        return None
+
+    existing_company_id = find_company_by_title(company_name)
+
+    if existing_company_id:
+        return existing_company_id
+
+    return create_company(data)
 
 
 def build_deal_fields(data: dict, requested_by: str = "") -> dict:
@@ -81,8 +180,8 @@ def build_deal_fields(data: dict, requested_by: str = "") -> dict:
         if value not in (None, ""):
             fields[bitrix_code] = value
 
-    # Дублируем ИНН во второй возможный текстовый field,
-    # потому что в Bitrix было найдено несколько кандидатов для ИНН.
+    # На всякий случай дублируем ИНН во второй возможный field.
+    # Если поле не нужно, Bitrix просто проигнорирует/или покажет ошибку — тогда уберём.
     if data.get("ИНН"):
         fields["UF_CRM_6461EF570B64C"] = data["ИНН"]
 
@@ -90,10 +189,14 @@ def build_deal_fields(data: dict, requested_by: str = "") -> dict:
 
 
 def create_deal(data: dict, requested_by: str = "") -> dict:
-    if not WEBHOOK:
-        raise RuntimeError("BITRIX_WEBHOOK_URL не задан в .env")
-
     fields = build_deal_fields(data, requested_by=requested_by)
+
+    company_name = normalize_company_name(data)
+
+    if company_name:
+        company_id = get_or_create_company(data)
+        if company_id:
+            fields["COMPANY_ID"] = company_id
 
     if DRY_RUN:
         return {
@@ -102,16 +205,12 @@ def create_deal(data: dict, requested_by: str = "") -> dict:
             "message": "DRY_RUN=1, сделка не создана",
         }
 
-    url = f"{WEBHOOK}/crm.deal.add.json"
-    response = requests.post(url, json={"fields": fields}, timeout=30)
-
-    try:
-        result = response.json()
-    except Exception:
-        raise RuntimeError(f"Bitrix вернул не JSON: {response.text}")
-
-    if "error" in result:
-        raise RuntimeError(json.dumps(result, ensure_ascii=False, indent=2))
+    result = bitrix_call(
+        "crm.deal.add",
+        {
+            "fields": fields
+        }
+    )
 
     deal_id = result.get("result")
 
