@@ -169,11 +169,13 @@ def build_deal_fields(data: dict, requested_by: str = "") -> dict:
         or "Новая точка из Telegram"
     )
 
+    assigned_by_id = data.get("_assigned_by_id") or DEFAULT_ASSIGNED_BY_ID
+
     fields = {
         "TITLE": title,
         "CATEGORY_ID": CATEGORY_ID,
         "STAGE_ID": STAGE_ID,
-        "ASSIGNED_BY_ID": DEFAULT_ASSIGNED_BY_ID,
+        "ASSIGNED_BY_ID": assigned_by_id,
         "COMMENTS": build_comments(data, requested_by=requested_by),
         "SOURCE_DESCRIPTION": "Telegram bot",
     }
@@ -184,8 +186,6 @@ def build_deal_fields(data: dict, requested_by: str = "") -> dict:
             fields[bitrix_code] = value
 
     # Поля, выбранные кнопками в Telegram.
-    # Они уже приходят готовыми в формате Bitrix:
-    # {"UF_CRM_1681712449": [4956], "UF_CRM_1730374903870": 10819}
     extra_fields = data.get("_bitrix_fields", {})
 
     for bitrix_code, value in extra_fields.items():
