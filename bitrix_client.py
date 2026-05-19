@@ -11,11 +11,18 @@ STAGE_ID = os.getenv("BITRIX_STAGE_ID", "C58:NEW")
 DEFAULT_ASSIGNED_BY_ID = int(os.getenv("BITRIX_DEFAULT_ASSIGNED_BY_ID", "297435"))
 DRY_RUN = os.getenv("DRY_RUN", "1") == "1"
 
-# Only safe text/number/url fields are filled automatically.
-# Enumeration/boolean fields are intentionally left for managers to fill in Bitrix manually.
+
 FIELD_MAPPING = {
     "Название": "TITLE",
+
+    # Текстовые поля
+    "Бренд": "UF_CRM_1667234851735",
+    "Клиент": "UF_CRM_COMPANY_TITLE",
+    "Компания": "UF_CRM_COMPANY_TITLE",
+
+    # ИНН: основной вариант
     "ИНН": "UF_CRM_1730198850",
+
     "Номер договора": "UF_CRM_1669358388218",
     "Адрес ресторана": "UF_CRM_1682671296431",
     "ФИО директора": "UF_CRM_1683720999095",
@@ -37,7 +44,7 @@ FIELD_MAPPING = {
 }
 
 
-def build_comments(data, requested_by=""):
+def build_comments(data: dict, requested_by: str = "") -> str:
     lines = ["Данные из Telegram-заявки:", ""]
 
     if requested_by:
@@ -51,8 +58,14 @@ def build_comments(data, requested_by=""):
     return "\n".join(lines)
 
 
-def build_deal_fields(data, requested_by=""):
-    title = data.get("Название") or data.get("Бренд") or data.get("Клиент") or "Новая точка из Telegram"
+def build_deal_fields(data: dict, requested_by: str = "") -> dict:
+    title = (
+        data.get("Название")
+        or data.get("Бренд")
+        or data.get("Клиент")
+        or data.get("Компания")
+        or "Новая точка из Telegram"
+    )
 
     fields = {
         "TITLE": title,
@@ -68,12 +81,17 @@ def build_deal_fields(data, requested_by=""):
         if value not in (None, ""):
             fields[bitrix_code] = value
 
+    # Дублируем ИНН во второй возможный текстовый field,
+    # потому что в Bitrix было найдено несколько кандидатов для ИНН.
+    if data.get("ИНН"):
+        fields["UF_CRM_6461EF570B64C"] = data["ИНН"]
+
     return fields
 
 
-def create_deal(data, requested_by=""):
+def create_deal(data: dict, requested_by: str = "") -> dict:
     if not WEBHOOK:
-        raise RuntimeError("BITRIX_WEBHOOK_URL is not set")
+        raise RuntimeError("BITRIX_WEBHOOK_URL не задан в .env")
 
     fields = build_deal_fields(data, requested_by=requested_by)
 
@@ -81,7 +99,7 @@ def create_deal(data, requested_by=""):
         return {
             "dry_run": True,
             "fields": fields,
-            "message": "DRY_RUN=1, deal was not created",
+            "message": "DRY_RUN=1, сделка не создана",
         }
 
     url = f"{WEBHOOK}/crm.deal.add.json"
@@ -90,12 +108,13 @@ def create_deal(data, requested_by=""):
     try:
         result = response.json()
     except Exception:
-        raise RuntimeError(f"Bitrix returned non-JSON response: {response.text}")
+        raise RuntimeError(f"Bitrix вернул не JSON: {response.text}")
 
     if "error" in result:
         raise RuntimeError(json.dumps(result, ensure_ascii=False, indent=2))
 
     deal_id = result.get("result")
+
     if not deal_id:
         raise RuntimeError(json.dumps(result, ensure_ascii=False, indent=2))
 
@@ -106,5 +125,5 @@ def create_deal(data, requested_by=""):
     }
 
 
-def get_deal_url(deal_id):
+def get_deal_url(deal_id) -> str:
     return f"https://bitrix.uzum.com/crm/deal/details/{deal_id}/"
