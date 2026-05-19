@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 pending_deals = {}
 
 
+# Telegram ID → Bitrix user ID
+TELEGRAM_TO_BITRIX_USER = {
+    7281850090: 389012,  # Akmaljon Xolmatov
+    8716512830: 399780,  # Maruf Saburov
+    5167425665: 398172,  # Suxrob Abduraxmonov
+    8250827312: 392006,  # Abbosxon Asildinov
+}
+
+
+BITRIX_RESPONSIBLE_NAMES = {
+    389012: "Akmaljon Xolmatov",
+    399780: "Maruf Saburov",
+    398172: "Suxrob Abduraxmonov",
+    392006: "Abbosxon Asildinov",
+}
+
+
 ENUM_QUESTIONS = [
     {
         "key": "segment",
@@ -213,6 +230,16 @@ ENUM_QUESTIONS = [
 ]
 
 
+def get_responsible_by_telegram_user(user):
+    assigned_by_id = TELEGRAM_TO_BITRIX_USER.get(user.id)
+    assigned_name = BITRIX_RESPONSIBLE_NAMES.get(
+        assigned_by_id,
+        "Дефолтный ответственный"
+    )
+
+    return assigned_by_id, assigned_name
+
+
 def build_choice_keyboard(request_id: str, question_index: int, question: dict) -> InlineKeyboardMarkup:
     buttons = []
     row = []
@@ -283,6 +310,10 @@ def format_final_preview(pending: dict) -> str:
     data = pending["data"]
 
     text = format_preview(data)
+
+    assigned_name = pending.get("assigned_name", "Дефолтный ответственный")
+    text += f"\n\nОтветственный в Bitrix: {assigned_name}"
+
     text += "\n\n" + format_selected_options(pending)
 
     if DRY_RUN:
@@ -311,6 +342,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    text = (
+        "Ваш Telegram ID:\n"
+        f"{user.id}\n\n"
+        f"Имя: {user.full_name}\n"
+        f"Username: @{user.username}" if user.username else f"Username: -"
+    )
+
+    await update.message.reply_text(text)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
 
@@ -331,6 +375,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     requested_by = f"{user.full_name} (@{user.username})" if user.username else user.full_name
 
+    assigned_by_id, assigned_name = get_responsible_by_telegram_user(user)
+
     request_id = uuid.uuid4().hex[:12]
 
     pending_deals[request_id] = {
@@ -340,9 +386,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "message_id": message.message_id,
         "bitrix_fields": {},
         "selected_options": {},
+        "assigned_by_id": assigned_by_id,
+        "assigned_name": assigned_name,
     }
 
     preview = format_preview(data)
+    preview += f"\n\nОтветственный в Bitrix: {assigned_name}"
 
     keyboard = InlineKeyboardMarkup([
         [
@@ -392,6 +441,9 @@ async def show_final_confirmation(query, request_id: str):
         return
 
     pending["data"]["_bitrix_fields"] = pending.get("bitrix_fields", {})
+
+    if pending.get("assigned_by_id"):
+        pending["data"]["_assigned_by_id"] = pending["assigned_by_id"]
 
     await query.edit_message_text(
         format_final_preview(pending),
@@ -470,6 +522,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             pending["data"]["_bitrix_fields"] = pending.get("bitrix_fields", {})
 
+            if pending.get("assigned_by_id"):
+                pending["data"]["_assigned_by_id"] = pending["assigned_by_id"]
+
             result = create_deal(
                 pending["data"],
                 requested_by=pending.get("requested_by", "")
@@ -519,6 +574,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
